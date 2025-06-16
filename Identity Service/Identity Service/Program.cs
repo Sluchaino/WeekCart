@@ -1,5 +1,8 @@
 using Application.Interfaces;
+using Application.Validators;
 using Domain.Entities;
+using FluentValidation;
+using FluentValidation.AspNetCore;
 using Infrastructure.Auth;
 using Infrastructure.Data;
 using Microsoft.AspNetCore.Identity;
@@ -40,6 +43,13 @@ builder.Services.AddAuthentication("Bearer")
            ClockSkew = TimeSpan.Zero
        };
    });
+
+builder.Services.AddControllers()
+                .AddFluentValidation(cfg =>
+                    cfg.RegisterValidatorsFromAssemblyContaining<RegisterValidator>());
+// либо новая API 11-й версии:
+builder.Services.AddFluentValidationAutoValidation();
+builder.Services.AddValidatorsFromAssemblyContaining<RegisterValidator>();
 
 builder.Services.AddScoped<ITokenService, TokenService>();
 

@@ -1,8 +1,10 @@
 ﻿using Application.Interfaces;
 using Domain.Entities;
-using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
+using Application.DTO;
 
 namespace Identity_Service.Controllers
 {
@@ -10,73 +12,78 @@ namespace Identity_Service.Controllers
     [ApiController]
     public class AuthController : ControllerBase
     {
-        private readonly UserManager<ApplicationUser> _um;
-        private readonly SignInManager<ApplicationUser> _sm;
-        private readonly ITokenService _ts;
+        private readonly UserManager<ApplicationUser> _userManager;
+        private readonly SignInManager<ApplicationUser> _signInManager;
+        private readonly ITokenService _tokenService;
 
-        [HttpPost("register")]
-        public async Task<IActionResult> Register()
+        public AuthController(UserManager<ApplicationUser> userManager,
+                              SignInManager<ApplicationUser> signInManager,
+                              ITokenService tokenService)
         {
+            _userManager = userManager;
+            _signInManager = signInManager;
+            _tokenService = tokenService;
+        }
+        [HttpPost("register")]
+        [AllowAnonymous]
+        public async Task<IActionResult> Register([FromBody] RegisterDTO dto)
+        {
+            var user = new ApplicationUser
+            {
+                UserName = dto.Email,
+                Email = dto.Email,
+                DisplayName = dto.DisplayName
+            };
 
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(ModelState);
-            }
-            try
-            {
-                //var req = await _userService.Add(registerForm.FirstName, registerForm.SecondName, registerForm.NumberPhone
-                    //, registerForm.Gender, registerForm.GetMailing, registerForm.Email, registerForm.Password);
-                return Ok(new
-                {
-                    //UserId = req
-                });
-            }
-            catch (Exception e)
-            {
-                return Conflict(e.Message);
+            var result = await _userManager.CreateAsync(user, dto.Password);
+            if (!result.Succeeded)
+                return BadRequest(result.Errors);
 
-            }
+            // при необходимости отправьте письмо с подтверждением e-mail здесь
+
+            var tokens = await _tokenService.IssueTokensAsync(user);
+            return CreatedAtAction(nameof(Register), new
+            {
+                accessToken = tokens.accessToken,
+                refreshToken = tokens.refreshToken
+            });
         }
         [HttpPost("login")]
-        public async Task<IActionResult> Login()
+        [AllowAnonymous]
+        public async Task<IActionResult> Login([FromBody] LoginDTO dto)
         {
+            var user = await _userManager.FindByEmailAsync(dto.Email);
+            if (user is null)
+                return Unauthorized("Неверная почта или пароль");
 
-            if (!ModelState.IsValid)
+            var signInRes = await _signInManager.CheckPasswordSignInAsync(
+                                user, dto.Password, lockoutOnFailure: false);
+
+            if (!signInRes.Succeeded)
+                return Unauthorized("Неверная почта или пароль");
+
+            var tokens = await _tokenService.IssueTokensAsync(user);
+            return Ok(new
             {
-                return BadRequest(ModelState);
-            }
-            try
-            {
-                //var req = await _userService.Get(loginForm.Email, loginForm.Password);
-                return Ok(new
-                {
-                    //UserId = req
-                });
-            }
-            catch (Exception e)
-            {
-                return Conflict(e.Message);
-            }
+                accessToken = tokens.accessToken,
+                refreshToken = tokens.refreshToken
+            });
         }
         [HttpPost("refresh")]
-        public async Task<IActionResult> Refresh()
+        [AllowAnonymous]
+        public async Task<IActionResult> Refresh([FromBody] RefreshDTO dto)
         {
+            if (string.IsNullOrWhiteSpace(dto.RefreshToken))
+                return BadRequest("Refresh-токен отсутствует");
 
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(ModelState);
-            }
             try
             {
-                //var req = await _userService.Get(loginForm.Email, loginForm.Password);
-                return Ok(new
-                {
-                    //UserId = req
-                });
+                var newAccess = await _tokenService.RotateRefreshAsync(dto.RefreshToken);
+                return Ok(new { accessToken = newAccess });
             }
-            catch (Exception e)
+            catch (SecurityTokenException ex)
             {
-                return Conflict(e.Message);
+                return Unauthorized(ex.Message);
             }
         }
     }

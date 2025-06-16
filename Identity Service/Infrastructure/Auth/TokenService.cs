@@ -34,12 +34,25 @@ public sealed class TokenService : ITokenService
      * PUBLIC API
      *-----------------------------------------------------------*/
 
-    public async Task<(string accessToken, string refreshToken)> IssueTokensAsync(ApplicationUser user,
-                                                                                 CancellationToken ct = default)
+    public async Task<(string accessToken, string refreshToken)> IssueTokensAsync(ApplicationUser user, CancellationToken ct = default)
     {
-        string access = CreateJwt(user);
-        string refresh = await CreateRefreshAsync(user, ct);
-        return (access, refresh);
+        // 1) короткий access-token
+        string accessToken = CreateJwt(user);
+
+        // 2) длинный refresh-token, сохраняем в БД
+        var refresh = new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            Token = GenerateSecureString(),          // 32-байтная случайная строка
+            Expires = DateTime.UtcNow.AddDays(_jwt.RefreshDays),
+            Revoked = false
+        };
+
+        _db.RefreshTokens.Add(refresh);
+        await _db.SaveChangesAsync(ct);
+
+        return (accessToken, refresh.Token);
     }
 
     public async Task<string> RotateRefreshAsync(string refreshToken,
@@ -64,8 +77,7 @@ public sealed class TokenService : ITokenService
         return newAccess;
     }
 
-    public async Task RevokeUserRefreshTokensAsync(Guid userId,
-                                                   CancellationToken ct = default)
+    public async Task RevokeUserRefreshTokensAsync(Guid userId, CancellationToken ct = default)
     {
         var tokens = await _db.RefreshTokens
                               .Where(t => t.UserId == userId && !t.Revoked)
@@ -107,8 +119,7 @@ public sealed class TokenService : ITokenService
         return _handler.WriteToken(token);
     }
 
-    private async Task<string> CreateRefreshAsync(ApplicationUser user,
-                                                  CancellationToken ct)
+    private async Task<string> CreateRefreshAsync(ApplicationUser user, CancellationToken ct)
     {
         var token = new RefreshToken
         {
