@@ -10,5 +10,8 @@ namespace Domain.Entities
     public class ApplicationUser : IdentityUser<Guid>
     {
         public string? DisplayName { get; set; }
+
+        public bool IsDeleted { get; set; }
+        public DateTime? DeletedAtUtc { get; set; }
     }
 }
