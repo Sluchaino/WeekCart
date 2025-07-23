@@ -1,83 +1,97 @@
-using Application.Interfaces;
+Ôªøusing Application.Interfaces;
 using Application.Validators;
 using Domain.Entities;
 using FluentValidation;
 using FluentValidation.AspNetCore;
 using Infrastructure.Auth;
 using Infrastructure.Data;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using System;
+using System.Collections.Generic;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-// 1) DB
-builder.Services.AddDbContext<ApplicationDbContext>(opt =>
-    opt.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+// -----------------------------------------------------------------------------
+// 1.  DATA: DbContext + PostgreSQL
+// -----------------------------------------------------------------------------
+builder.Services.AddDbContext<ApplicationDbContext>(opts =>
+    opts.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
 
-// 2) Identity
+// -----------------------------------------------------------------------------
+// 2.  IDENTITY
+// -----------------------------------------------------------------------------
 builder.Services
-    .AddIdentity<ApplicationUser, IdentityRole<Guid>>(o =>
-       o.SignIn.RequireConfirmedEmail = true)
+    .AddIdentity<ApplicationUser, IdentityRole<Guid>>(opts =>
+        opts.SignIn.RequireConfirmedEmail = false)
     .AddEntityFrameworkStores<ApplicationDbContext>()
     .AddDefaultTokenProviders();
 
-// 3) JWT
+// -----------------------------------------------------------------------------
+// 3.  JWT authentication
+// -----------------------------------------------------------------------------
 builder.Services.Configure<JwtOptions>(
     builder.Configuration.GetSection(JwtOptions.SectionName));
-builder.Services.Configure<JwtOptions>(
-        builder.Configuration.GetSection("Jwt"));
 
-builder.Services.AddAuthentication("Bearer")
-   .AddJwtBearer("Bearer", o =>
-   {
-       var cfg = builder.Configuration.GetSection("Jwt");
-       o.TokenValidationParameters = new()
-       {
-           ValidIssuer = cfg["Issuer"],
-           ValidAudience = cfg["Audience"],
-           IssuerSigningKey = new SymmetricSecurityKey(
-               Encoding.UTF8.GetBytes(cfg["Key"]!)),
-           ClockSkew = TimeSpan.Zero,
-           ValidateLifetime = true,
-           NameClaimType = ClaimTypes.NameIdentifier
-       };
-   });
+JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();   // <‚Äì‚Äì —É–±–∏—Ä–∞–µ–º –∞–≤—Ç–æ-–º–∞–ø–ø–∏–Ω–≥
 
-builder.Services.AddControllers()
-                .AddFluentValidation(cfg =>
-                    cfg.RegisterValidatorsFromAssemblyContaining<RegisterValidator>());
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!)),
 
-// ÎË·Ó ÌÓ‚‡ˇ API 11-È ‚ÂÒËË:
+            // –ö–†–ò–¢–ò–ß–ï–°–ö–ò–ï –ù–ê–°–¢–†–û–ô–ö–ò
+            NameClaimType = JwtRegisteredClaimNames.Sub, // –∏–¥–µ–Ω—Ç–∏—Ñ–∏–∫–∞—Ç–æ—Ä –ø–æ–ª—å–∑–æ–≤–∞—Ç–µ–ª—è
+            RoleClaimType = ClaimTypes.Role              // —Ä–æ–ª–∏
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+// -----------------------------------------------------------------------------
+// 4.  MVC + FluentValidation
+// -----------------------------------------------------------------------------
+builder.Services.AddControllers();
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<RegisterValidator>();
 
+// -----------------------------------------------------------------------------
+// 5.  DI
+// -----------------------------------------------------------------------------
 builder.Services.AddScoped<ITokenService, TokenService>();
 
-
-
-builder.Services.AddControllers();
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+// -----------------------------------------------------------------------------
+// 6.  Swagger (—Å Bearer-–∞–≤—Ç–æ—Ä–∏–∑–∞—Ü–∏–µ–π)
+// -----------------------------------------------------------------------------
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo { Title = "Identity Service API", Version = "v1" });
 
-    // 1. ƒÓ·‡‚ÎˇÂÏ ÓÔÂ‰ÂÎÂÌËÂ ÒıÂÏ˚ ·ÂÁÓÔ‡ÒÌÓÒÚË
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
-        Description = "JWT Authorization header using the Bearer scheme",
+        Description = "–í–≤–µ–¥–∏—Ç–µ JWT –≤ —Ñ–æ—Ä–º–∞—Ç–µ **Bearer <token>**",
         Name = "Authorization",
         In = ParameterLocation.Header,
         Type = SecuritySchemeType.ApiKey,
         Scheme = "Bearer"
     });
 
-    // 2. ƒÓ·‡‚ÎˇÂÏ ÚÂ·Ó‚‡ÌËÂ ·ÂÁÓÔ‡ÒÌÓÒÚË
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
@@ -86,30 +100,30 @@ builder.Services.AddSwaggerGen(c =>
                 Reference = new OpenApiReference
                 {
                     Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                },
-                Scheme = "oauth2",
-                Name = "Bearer",
-                In = ParameterLocation.Header
+                    Id   = "Bearer"
+                }
             },
-            new List<string>()
+            Array.Empty<string>()
         }
     });
 });
-builder.Services.AddCors(options =>
+
+// -----------------------------------------------------------------------------
+// 7.  CORS
+// -----------------------------------------------------------------------------
+builder.Services.AddCors(o =>
 {
-    options.AddPolicy("AllowAll", builder =>
-    {
-        builder.AllowAnyOrigin()
-               .AllowAnyMethod()
-               .AllowAnyHeader();
-    });
+    o.AddPolicy("AllowAll", policy =>
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader());
 });
 
-
+// -----------------------------------------------------------------------------
+// 8.  HTTP pipeline
+// -----------------------------------------------------------------------------
 var app = builder.Build();
-app.UseCors("AllowAll");
-// Configure the HTTP request pipeline.
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -117,9 +131,23 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseCors("AllowAll");
 
-app.UseAuthorization();
+app.UseAuthentication();          // —Å–Ω–∞—á–∞–ª–∞ –∞—É—Ç–µ–Ω—Ç–∏—Ñ–∏–∫–∞—Ü–∏—è
+app.UseAuthorization();           // –∑–∞—Ç–µ–º –∞–≤—Ç–æ—Ä–∏–∑–∞—Ü–∏—è
 
 app.MapControllers();
 
+// -----------------------------------------------------------------------------
+// 9.  –ò–Ω–∏—Ü–∏–∞–ª–∏–∑–∞—Ü–∏—è —Ä–æ–ª–µ–π
+// -----------------------------------------------------------------------------
+using (var scope = app.Services.CreateScope())
+{
+    var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+    var roles = new[] { "USER", "ADMIN" };
+
+    foreach (var roleName in roles)
+        if (!await roleManager.RoleExistsAsync(roleName))
+            await roleManager.CreateAsync(new IdentityRole<Guid>(roleName));
+}
 app.Run();

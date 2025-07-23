@@ -1,78 +1,109 @@
-﻿using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Text;
-using Application.Interfaces;
+﻿using Application.Interfaces;
 using Domain.Entities;
 using Infrastructure.Data;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Infrastructure.Auth;
 
-/// <inheritdoc />
 public sealed class TokenService : ITokenService
 {
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly ApplicationDbContext _db;
     private readonly JwtOptions _jwt;
     private readonly JwtSecurityTokenHandler _handler = new();
+    private readonly ILogger<TokenService> _logger;
 
     public TokenService(
         UserManager<ApplicationUser> userManager,
         ApplicationDbContext db,
-        IOptions<JwtOptions> jwtOptions)
+        IOptions<JwtOptions> jwtOptions,
+        ILogger<TokenService> logger)
     {
         _userManager = userManager;
         _db = db;
         _jwt = jwtOptions.Value;
-    }
+        _logger = logger;
 
-    /*-------------------------------------------------------------
-     * PUBLIC API
-     *-----------------------------------------------------------*/
+        // Validate JWT configuration
+        if (string.IsNullOrEmpty(_jwt.Key) || _jwt.Key.Length < 32)
+            throw new ArgumentException("JWT key must be at least 32 characters long");
+    }
 
     public async Task<(string accessToken, string refreshToken)> IssueTokensAsync(ApplicationUser user, CancellationToken ct = default)
     {
-        // 1) короткий access-token
-        string accessToken = CreateJwt(user);
-
-        // 2) длинный refresh-token, сохраняем в БД
-        var refresh = new RefreshToken
+        try
         {
-            Id = Guid.NewGuid(),
-            UserId = user.Id,
-            Token = GenerateSecureString(),          // 32-байтная случайная строка
-            Expires = DateTime.UtcNow.AddDays(_jwt.RefreshDays),
-            Revoked = false
-        };
+            string accessToken = await CreateJwtAsync(user);
 
-        _db.RefreshTokens.Add(refresh);
-        await _db.SaveChangesAsync(ct);
+            var refresh = new RefreshToken
+            {
+                Id = Guid.NewGuid(),
+                UserId = user.Id,
+                Token = GenerateSecureString(),
+                Expires = DateTime.UtcNow.AddDays(_jwt.RefreshDays),
+                Revoked = false
+            };
 
-        return (accessToken, refresh.Token);
+            _db.RefreshTokens.Add(refresh);
+            await _db.SaveChangesAsync(ct);
+
+            _logger.LogInformation("Tokens issued for user {UserId}", user.Id);
+
+            return (accessToken, refresh.Token);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to issue tokens for user {UserId}", user.Id);
+            throw;
+        }
     }
 
-    public async Task<string> RotateRefreshAsync(string refreshToken,
-                                                 CancellationToken ct = default)
+    public async Task<string> RotateRefreshAsync(string refreshToken, CancellationToken ct = default)
     {
         var token = await _db.RefreshTokens
                              .FirstOrDefaultAsync(x => x.Token == refreshToken, ct);
-        if (token is null || token.Revoked || token.Expires < DateTime.UtcNow)
+        if (token is null)
+        {
+            _logger.LogWarning("Refresh token not found: {Token}", refreshToken);
             throw new SecurityTokenException("Refresh token is invalid");
+        }
+
+        if (token.Revoked || token.ReplacedBy != null)
+        {
+            _logger.LogWarning("Refresh token has been revoked: {Token}", refreshToken);
+            throw new SecurityTokenException("Refresh token has been revoked");
+        }
+
+        if (token.Expires < DateTime.UtcNow)
+        {
+            _logger.LogWarning("Refresh token expired: {Token}", refreshToken);
+            throw new SecurityTokenException("Refresh token expired");
+        }
 
         token.Revoked = true;
 
-        var user = await _userManager.FindByIdAsync(token.UserId.ToString())
-                   ?? throw new SecurityTokenException("User not found");
+        var user = await _userManager.FindByIdAsync(token.UserId.ToString());
+        if (user is null)
+        {
+            _logger.LogWarning("User not found for token rotation: {UserId}", token.UserId);
+            throw new SecurityTokenException("User not found");
+        }
 
-        var newAccess = CreateJwt(user);
+        var newAccess = await CreateJwtAsync(user);
         var newRefresh = await CreateRefreshAsync(user, ct);
 
         token.ReplacedBy = newRefresh;
         await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation("Token rotated for user {UserId}", user.Id);
 
         return newAccess;
     }
@@ -87,36 +118,39 @@ public sealed class TokenService : ITokenService
             t.Revoked = true;
 
         await _db.SaveChangesAsync(ct);
+        _logger.LogInformation("Refresh tokens revoked for user {UserId}", userId);
     }
 
-    /*-------------------------------------------------------------
-     * PRIVATE HELPERS
-     *-----------------------------------------------------------*/
-
-    private string CreateJwt(ApplicationUser user)
+    private async Task<string> CreateJwtAsync(ApplicationUser user)
     {
         var creds = new SigningCredentials(
             new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwt.Key)),
-            SecurityAlgorithms.HmacSha256);
+            SecurityAlgorithms.HmacSha256Signature);
 
         var claims = new List<Claim>
         {
-            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new(ClaimTypes.Email,          user.Email!)
+            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString("D")),
+            new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString("D")),
+            new Claim(JwtRegisteredClaimNames.Email, user.Email),
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("D")),
+            new Claim(JwtRegisteredClaimNames.Iat,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
+                ClaimValueTypes.Integer64)
         };
 
-        // роли добавим для примера
-        var roles = _userManager.GetRolesAsync(user).Result;
+        var roles = await _userManager.GetRolesAsync(user);
         claims.AddRange(roles.Select(r => new Claim(ClaimTypes.Role, r)));
 
-        var token = new JwtSecurityToken(
-            issuer: _jwt.Issuer,
-            audience: _jwt.Audience,
-            claims: claims,
-            expires: DateTime.UtcNow.AddMinutes(_jwt.AccessMinutes),
-            signingCredentials: creds);
+        var tokenDescriptor = new SecurityTokenDescriptor
+        {
+            Subject = new ClaimsIdentity(claims),
+            Expires = DateTime.UtcNow.AddMinutes(_jwt.AccessMinutes),
+            SigningCredentials = creds,
+            Issuer = _jwt.Issuer,
+            Audience = _jwt.Audience
+        };
 
-        return _handler.WriteToken(token);
+        return _handler.WriteToken(_handler.CreateToken(tokenDescriptor));
     }
 
     private async Task<string> CreateRefreshAsync(ApplicationUser user, CancellationToken ct)
@@ -138,7 +172,6 @@ public sealed class TokenService : ITokenService
 
     private static string GenerateSecureString()
     {
-        // 32-байтный случайный токен &rarr; Base64Url
         var bytes = RandomNumberGenerator.GetBytes(32);
         return Base64UrlEncoder.Encode(bytes);
     }
