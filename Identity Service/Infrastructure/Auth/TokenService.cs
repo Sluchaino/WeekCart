@@ -125,32 +125,29 @@ public sealed class TokenService : ITokenService
     {
         var creds = new SigningCredentials(
             new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwt.Key)),
-            SecurityAlgorithms.HmacSha256Signature);
+            SecurityAlgorithms.HmacSha256);
 
         var claims = new List<Claim>
-        {
-            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString("D")),
-            new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString("D")),
-            new Claim(JwtRegisteredClaimNames.Email, user.Email),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("D")),
-            new Claim(JwtRegisteredClaimNames.Iat,
-                DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
-                ClaimValueTypes.Integer64)
-        };
+    {
+        new Claim(ClaimTypes.NameIdentifier, user.Id.ToString("D")),
+        new Claim(JwtRegisteredClaimNames.Email, user.Email),
+        new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")),
+        new Claim(JwtRegisteredClaimNames.Iat,
+                  DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
+                  ClaimValueTypes.Integer64)
+    };
 
-        var roles = await _userManager.GetRolesAsync(user);
-        claims.AddRange(roles.Select(r => new Claim(ClaimTypes.Role, r)));
+        foreach (var role in await _userManager.GetRolesAsync(user))
+            claims.Add(new Claim(ClaimTypes.Role, role));
 
-        var tokenDescriptor = new SecurityTokenDescriptor
-        {
-            Subject = new ClaimsIdentity(claims),
-            Expires = DateTime.UtcNow.AddMinutes(_jwt.AccessMinutes),
-            SigningCredentials = creds,
-            Issuer = _jwt.Issuer,
-            Audience = _jwt.Audience
-        };
+        var token = new JwtSecurityToken(
+            issuer: _jwt.Issuer,
+            audience: _jwt.Audience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddMinutes(_jwt.AccessMinutes),
+            signingCredentials: creds);
 
-        return _handler.WriteToken(_handler.CreateToken(tokenDescriptor));
+        return _handler.WriteToken(token);
     }
 
     private async Task<string> CreateRefreshAsync(ApplicationUser user, CancellationToken ct)

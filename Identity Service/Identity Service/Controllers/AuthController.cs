@@ -119,13 +119,11 @@ public class AuthController : ControllerBase
     [HttpDelete("me")]
     public async Task<IActionResult> DeleteMe([FromBody] DeleteAccountDto dto)
     {
-        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);   // ← поменяли
-        if (string.IsNullOrEmpty(userId))
-            return Unauthorized("Invalid user identification");
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null) return Unauthorized();
 
         var user = await _userManager.FindByIdAsync(userId);
-        if (user is null)
-            return Unauthorized("User not found");
+        if (user is null) return NotFound();
 
         if (!await _userManager.CheckPasswordAsync(user, dto.PasswordConfirmation))
             return BadRequest("Invalid password");
