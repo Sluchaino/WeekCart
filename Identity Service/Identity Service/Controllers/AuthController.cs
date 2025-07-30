@@ -15,7 +15,7 @@ namespace Identity_Service.Controllers;
 [ApiController]
 public class AuthController : ControllerBase
 {
-    private const string UserRole = "USER";
+    private const string UserRole =  "USER";
     private const string AdminRole = "ADMIN";
 
     private readonly UserManager<ApplicationUser> _userManager;
