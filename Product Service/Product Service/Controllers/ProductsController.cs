@@ -1,11 +1,12 @@
-﻿using System.Security.Claims;
+﻿using Application.DTO;
+using Infrastructure.Data;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Application.DTO;
-using Infrastructure.Data;
-using DomainProduct = Domain.Entities.Product;
 using System.Linq;
+using System.Security.Claims;
+using DomainProduct = Domain.Entities.Product;
 
 namespace Product_Service.Controllers
 {
@@ -79,7 +80,7 @@ namespace Product_Service.Controllers
 
         // POST: /api/products
         [HttpPost]
-        [Authorize]
+        [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
         [ProducesResponseType(typeof(ProductDto), StatusCodes.Status201Created)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<IActionResult> Create([FromBody] CreateProductDto dto, CancellationToken ct = default)
