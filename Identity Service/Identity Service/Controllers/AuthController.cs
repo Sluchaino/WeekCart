@@ -187,14 +187,14 @@ public class AuthController : ControllerBase
     [HttpGet("identity")]
     public IActionResult GetIdentity()
     {
-        var userId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
-        var email = User.FindFirstValue(JwtRegisteredClaimNames.Email);
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var email = User.FindFirstValue(ClaimTypes.Email);
 
         return Ok(new
         {
-            UserId = userId,
-            Email = email,
-            Claims = User.Claims.Select(c => new { c.Type, c.Value })
+            userId,
+            email,
+            claims = User.Claims.Select(c => new { c.Type, c.Value })
         });
     }
     // -------------------------------------------------------------------------
