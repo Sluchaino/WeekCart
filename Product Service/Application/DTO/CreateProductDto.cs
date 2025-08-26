@@ -6,7 +6,10 @@ using System.Threading.Tasks;
 
 namespace Application.DTO
 {
-    internal class CreateProductDto
-    {
-    }
+    public record CreateProductDto(
+        string Title,
+        string? Description,
+        decimal Price,
+        string Currency = "RUB",
+        string? ImageUrl = null);
 }

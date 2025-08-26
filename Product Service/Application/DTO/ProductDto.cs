@@ -6,7 +6,5 @@ using System.Threading.Tasks;
 
 namespace Application.DTO
 {
-    internal class ProductDto
-    {
-    }
+    public record ProductDto(Guid Id, string Title, string? Description, decimal Price, string Currency, string? ImageUrl);
 }
